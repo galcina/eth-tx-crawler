@@ -46,9 +46,11 @@
             align-items: center;
             gap: 8px;
         }
-        input[type="checkbox"] {
+        input[type="checkbox"],
+        input[type="radio"] {
             width: 18px;
             height: 18px;
+            cursor: pointer;
         }
         button {
             background-color: #4CAF50;
@@ -192,32 +194,64 @@
         <!-- Transactions Crawler Form -->
         <div class="form-card">
             <form method="GET" action="/crawl">
-        <div class="form-group">
-            <label for="address">Ethereum Address:</label>
-            <input type="text" id="address" name="address" placeholder="0x..." required>
-        </div>
-        <div class="form-group">
-            <label for="start_block">Start Block:</label>
-            <input type="number" id="start_block" name="start_block" placeholder="9000000" required>
-        </div>
-        <div class="form-group">
-            <div class="checkbox-group">
-                <input type="checkbox" id="include_tokens" name="include_tokens" value="true" {% if results and results.include_tokens %}checked{% endif %}>
-                <label for="include_tokens">Include Tokens</label>
-            </div>
-        </div>
-        <div class="form-group">
-            <div class="checkbox-group">
-                <input type="checkbox" id="crawl_all" name="crawl_all" value="true" {% if results and results.crawl_all %}checked{% endif %}>
-                <label for="crawl_all">Crawl ALL (may take longer)</label>
-            </div>
-            <small style="color: #666; display: block; margin-top: 5px;">For large histories, UI shows only first 2000 rows to prevent browser crash.</small>
-        </div>
-        <div class="form-group">
-            <label for="max_pages">Max pages (optional; empty = no limit):</label>
-            <input type="number" id="max_pages" name="max_pages" min="1" placeholder="(optional) e.g. 10" value="{{ results.max_pages if results and results.max_pages else '' }}">
-        </div>
-                <button type="submit">Crawl Transactions</button>
+                <h2 style="margin-top: 0; color: #2e7d32;">Transaction Crawler</h2>
+                
+                <div class="form-group">
+                    <label for="address">Ethereum Address:</label>
+                    <input type="text" id="address" name="address" placeholder="0x..." value="{{ results.address if results else '' }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="start_block">Start Block:</label>
+                    <input type="number" id="start_block" name="start_block" placeholder="9000000" value="{{ results.start_block if results else '' }}" required>
+                </div>
+                
+                <!-- Mode Selection -->
+                <div class="form-group" style="background-color: #f0f8ff; padding: 15px; border-radius: 4px; border: 2px solid #4CAF50;">
+                    <label style="font-size: 16px; margin-bottom: 10px; display: block;">
+                        <strong>Mode Selection:</strong>
+                    </label>
+                    <div style="margin-bottom: 10px;">
+                        <div class="checkbox-group" style="margin-bottom: 8px;">
+                            <input type="radio" id="mode_all" name="mode" value="all" {% if not results or results.crawl_all %}checked{% endif %}>
+                            <label for="mode_all" style="font-weight: bold; color: #2e7d32; cursor: pointer;">
+                                <strong>Crawl ALL (Complete)</strong> - Required for assignment
+                            </label>
+                        </div>
+                        <small style="color: #555; margin-left: 26px; display: block;">
+                            ✅ Collects ALL transactions from start block to latest<br>
+                            ✅ Guaranteed complete coverage with deduplication<br>
+                            ✅ CSV export available<br>
+                            ✅ Progress tracking with pause/resume
+                        </small>
+                    </div>
+                    <div>
+                        <div class="checkbox-group" style="margin-bottom: 8px;">
+                            <input type="radio" id="mode_browse" name="mode" value="browse" {% if results and not results.crawl_all %}checked{% endif %}>
+                            <label for="mode_browse" style="font-weight: bold; color: #666; cursor: pointer;">
+                                Browse (Fast) - Quick inspection only
+                            </label>
+                        </div>
+                        <small style="color: #555; margin-left: 26px; display: block;">
+                            ⚡ Fast single-page queries (200 results per page)<br>
+                            ⚠️ Does NOT guarantee ALL transactions<br>
+                            ⚠️ No CSV export available<br>
+                            💡 Use for quick exploration only
+                        </small>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="include_tokens" name="include_tokens" value="true" {% if results and results.include_tokens %}checked{% endif %}>
+                        <label for="include_tokens">Include ERC-20 Token Transfers</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="max_pages">Max pages (optional; empty = no limit):</label>
+                    <input type="number" id="max_pages" name="max_pages" min="1" placeholder="(optional) e.g. 10" value="{{ results.max_pages if results and results.max_pages else '' }}">
+                    <small style="color: #666; display: block; margin-top: 5px;">Safety limit for Crawl ALL mode only</small>
+                </div>
+                <button type="submit">Start Crawl</button>
             </form>
         </div>
     </div>
@@ -253,6 +287,21 @@
     {% if results %}
     <div class="results">
         <h2>Results</h2>
+        
+        {% if not results.crawl_all %}
+        <!-- Browse Mode Banner -->
+        <div class="result-item" style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin-bottom: 20px;">
+            <strong style="color: #856404;">⚠️ Browse Mode - Limited Results</strong>
+            <p style="margin: 10px 0 0 0; color: #856404;">
+                Browse mode shows one page at a time (e.g., {{ results.eth_count }} results on this page). 
+                It does <strong>NOT</strong> guarantee ALL transactions from start block to latest.
+            </p>
+            <p style="margin: 10px 0 0 0; color: #856404;">
+                <strong>For full history + CSV export:</strong> Use <strong>Crawl ALL (Complete)</strong> mode above.
+            </p>
+        </div>
+        {% endif %}
+        
         <div class="result-item">
             <strong>Address:</strong> {{ results.address }}
         </div>
@@ -265,9 +314,48 @@
         </div>
         {% endif %}
         
+        {% if results.crawl_all %}
+        <!-- Crawl ALL Mode Info -->
+        <div class="result-item" style="background-color: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin-bottom: 20px;">
+            <strong style="color: #155724;">✅ Crawl ALL Mode - Complete Coverage</strong>
+            <p style="margin: 10px 0 5px 0; color: #155724;">
+                <strong>Total Unique ETH Transactions:</strong> {{ results.eth_total if results.eth_total else 'N/A' }}
+            </p>
+            {% if results.coverage_start and results.coverage_end and results.latest_block %}
+            <p style="margin: 5px 0; color: #155724;">
+                <strong>Coverage:</strong> {{ results.coverage_start }} → {{ results.coverage_end }} (latest: {{ results.latest_block }})
+                {% if results.coverage_status %}
+                    {% if results.coverage_status.status == "complete" %}
+                    <span style="color: #28a745; font-weight: bold;">{{ results.coverage_status.icon }} Covered to latest</span>
+                    {% elif results.coverage_status.status == "stopped_early" %}
+                    <span style="color: #ffc107; font-weight: bold;">{{ results.coverage_status.icon }} Stopped early</span>
+                    {% else %}
+                    <span style="color: #17a2b8; font-weight: bold;">{{ results.coverage_status.icon }} In progress</span>
+                    {% endif %}
+                {% elif results.done and results.coverage_end >= results.latest_block %}
+                <span style="color: #28a745; font-weight: bold;">✅ Covered to latest</span>
+                {% elif results.paused or (results.done and results.coverage_end < results.latest_block) %}
+                <span style="color: #ffc107; font-weight: bold;">⚠️ Stopped early</span>
+                {% else %}
+                <span style="color: #17a2b8; font-weight: bold;">🔄 In progress</span>
+                {% endif %}
+            </p>
+            {% endif %}
+            {% if results.segments_done is defined or results.pages_total is defined %}
+            <p style="margin: 5px 0; color: #155724; font-size: 0.9em;">
+                Segments: {{ results.segments_done if results.segments_done is defined else 'N/A' }} | 
+                Pages: {{ results.pages_total if results.pages_total is defined else 'N/A' }}
+                {% if results.current_segment_start and results.current_segment_end %}
+                | Current: {{ results.current_segment_start }} → {{ results.current_segment_end }}
+                {% endif %}
+            </p>
+            {% endif %}
+        </div>
+        {% else %}
         <div class="result-item">
             <strong>ETH transactions on this page:</strong> {{ results.eth_count }}
         </div>
+        {% endif %}
         
         {% if results.crawl_all %}
         <div class="result-item" style="background-color: #fff3cd; border-left: 4px solid #ffc107;">
@@ -338,6 +426,7 @@
                     <th>From</th>
                     <th>To</th>
                     <th>Value (ETH)</th>
+                    <th>Fee (ETH)</th>
                     <th>Hash</th>
                 </tr>
             </thead>
@@ -347,10 +436,23 @@
                     <td>{{ tx.time }}</td>
                     <td>{{ tx.block }}</td>
                     <td class="direction-{{ tx.direction.lower() }}">{{ tx.direction }}</td>
-                    <td class="hash-cell">{{ tx.from }}</td>
-                    <td class="hash-cell">{{ tx.to }}</td>
+                    <td class="hash-cell" title="{{ tx.from }}">
+                        {% if tx.from|length > 18 %}{{ tx.from[:10] }}...{{ tx.from[-8:] }}{% else %}{{ tx.from }}{% endif %}
+                    </td>
+                    <td class="hash-cell" title="{{ tx.to }}">
+                        {% if tx.to|length > 18 %}{{ tx.to[:10] }}...{{ tx.to[-8:] }}{% else %}{{ tx.to }}{% endif %}
+                    </td>
                     <td>{{ tx.value_eth }}</td>
-                    <td class="hash-cell">{{ tx.hash }}</td>
+                    <td>{{ tx.tx_fee_eth if tx.tx_fee_eth else 'N/A' }}</td>
+                    <td class="hash-cell">
+                        {% if tx.etherscan_link %}
+                        <a href="{{ tx.etherscan_link }}" target="_blank" title="{{ tx.hash }}" style="color: #4CAF50; text-decoration: none;">
+                            {{ tx.hash_short }}
+                        </a>
+                        {% else %}
+                        <span title="{{ tx.hash }}">{{ tx.hash_short }}</span>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

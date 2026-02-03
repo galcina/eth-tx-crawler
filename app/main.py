@@ -94,6 +94,31 @@ def format_transaction(tx: dict, address: str) -> dict:
         time_str = "N/A"
     
     value_eth = wei_to_eth(tx.get("value", "0"))
+    
+    # Calculate transaction fee if available
+    tx_fee_eth = None
+    gas_used = tx.get("gasUsed")
+    gas_price = tx.get("gasPrice")
+    if gas_used and gas_price:
+        try:
+            gas_used_int = int(gas_used) if isinstance(gas_used, str) else gas_used
+            gas_price_int = int(gas_price) if isinstance(gas_price, str) else gas_price
+            fee_wei = gas_used_int * gas_price_int
+            tx_fee_eth = wei_to_eth(str(fee_wei))
+        except (ValueError, TypeError):
+            pass
+    
+    # Shorten hash for display (first 8 + last 6 chars)
+    tx_hash = tx.get("hash", "N/A")
+    hash_short = tx_hash
+    if tx_hash != "N/A" and len(tx_hash) > 14:
+        hash_short = f"{tx_hash[:8]}...{tx_hash[-6:]}"
+    
+    # Etherscan link
+    etherscan_link = None
+    if tx_hash != "N/A" and tx_hash.startswith("0x"):
+        etherscan_link = f"https://etherscan.io/tx/{tx_hash}"
+    
     return {
         "time": time_str,
         "block": tx.get("blockNumber", "N/A"),
@@ -101,8 +126,36 @@ def format_transaction(tx: dict, address: str) -> dict:
         "from": tx.get("from", "N/A"),
         "to": tx.get("to", "N/A"),
         "value_eth": f"{value_eth:.6f}",
-        "hash": tx.get("hash", "N/A")
+        "hash": tx_hash,
+        "hash_short": hash_short,
+        "etherscan_link": etherscan_link,
+        "tx_fee_eth": f"{tx_fee_eth:.6f}" if tx_fee_eth is not None else None
     }
+
+
+def get_coverage_status(coverage_start: Optional[int], coverage_end: Optional[int], latest_block: Optional[int], done: bool) -> dict:
+    """Generate coverage status information for display."""
+    if coverage_start is None or coverage_end is None or latest_block is None:
+        return {"text": "N/A", "status": "unknown", "icon": "❓"}
+    
+    if done and coverage_end >= latest_block:
+        return {
+            "text": f"{coverage_start:,} → {coverage_end:,} (latest: {latest_block:,})",
+            "status": "complete",
+            "icon": "✅"
+        }
+    elif done:
+        return {
+            "text": f"{coverage_start:,} → {coverage_end:,} (latest: {latest_block:,})",
+            "status": "stopped_early",
+            "icon": "⚠️"
+        }
+    else:
+        return {
+            "text": f"{coverage_start:,} → {coverage_end:,} (latest: {latest_block:,})",
+            "status": "in_progress",
+            "icon": "🔄"
+        }
 
 
 def format_token_transfer(tx: dict, address: str) -> dict:
@@ -215,13 +268,19 @@ def crawl_all_start(
                     "eth_total_unique": 0,
                     "current_segment_start": None,
                     "current_segment_end": None,
+                    "coverage_start": start_block,
+                    "coverage_end": start_block - 1,  # Will be updated as segments complete
                     "stop_requested": False,
                     "running": False,
                     "done": False,
                     "paused": False,
                     "error": None,
                     "rid": None,
-                    "eth_preview": [],  # Live preview (last 200 formatted rows)
+                    "seen_hashes": {},  # Deduplication dict: hash -> raw tx dict
+                    "segments": [],  # List of segment metadata
+                    "partial_preview_eth": [],  # Raw tx dicts (up to RENDER_LIMIT_ETH)
+                    "eth_preview": [],  # Formatted preview (last PREVIEW_LIMIT rows) - for backward compat
+                    "token_seen_hashes": {},  # For token transfers if include_tokens
                     "token_preview": []  # Live token preview (last 200 formatted rows)
                 }
             
@@ -286,6 +345,7 @@ def crawl_status(job_id: str = Query(...)):
         
         job = JOBS[job_id]
         
+        eth_total_unique = job.get("eth_total_unique", 0)
         status = {
             "running": job.get("running", False),
             "done": job.get("done", False),
@@ -296,14 +356,17 @@ def crawl_status(job_id: str = Query(...)):
             "current_segment_end": job.get("current_segment_end"),
             "segments_done": job.get("segments_done", 0),
             "pages_total": job.get("pages_total", 0),
-            "eth_total_unique": job.get("eth_total_unique", 0),
+            "eth_total_unique": eth_total_unique,
             "stop_requested": job.get("stop_requested", False),
             "rid": None,
             "eth_preview": job.get("eth_preview", []),  # Last 200 formatted rows for live preview
             "token_preview": job.get("token_preview", []),  # Last 200 formatted token rows
             "high_activity": job.get("high_activity", False),  # High activity warning flag
             "high_activity_reason": job.get("high_activity_reason", ""),  # Explanation string
-            "window_blocks": job.get("window_blocks", MAX_WINDOW_BLOCKS)  # Current window size
+            "window_blocks": job.get("window_blocks", MAX_WINDOW_BLOCKS),  # Current window size
+            "coverage_start": job.get("coverage_start", job.get("start_block", 0)),
+            "coverage_end": job.get("coverage_end", job.get("start_block", 0) - 1),
+            "has_partial": eth_total_unique > 0  # Flag indicating partial results available
         }
         
         if job.get("done") and job.get("rid"):
@@ -335,14 +398,24 @@ def crawl_resume(job_id: str = Query(...)):
         job = JOBS[job_id]
         
         # Check if job can be resumed (paused, not running, not done)
-        if not job.get("paused", False) or job.get("running", False) or job.get("done", False):
-            return JSONResponse({"error": "Job cannot be resumed"}, status_code=400)
+        if not job.get("paused", False):
+            return JSONResponse({"error": "Job is not paused"}, status_code=400)
+        if job.get("running", False):
+            return JSONResponse({"error": "Job is already running"}, status_code=400)
+        if job.get("done", False):
+            return JSONResponse({"error": "Job is already done"}, status_code=400)
         
         # Reset pause state and start new thread
         job["paused"] = False
         job["stop_requested"] = False
         job["running"] = True
         job["error"] = None
+        
+        # Ensure seg_start is set correctly (should be coverage_end + 1, or use saved seg_start)
+        if job.get("coverage_end") is not None:
+            # Resume from after the last completed segment
+            job["seg_start"] = job["coverage_end"] + 1
+        # Otherwise use saved seg_start
         
         thread = threading.Thread(target=run_job, args=(job_id,), daemon=True)
         thread.start()
@@ -540,6 +613,8 @@ def run_job(job_id: str):
     with JOBS_LOCK:
         job = JOBS[job_id]
         job["running"] = True
+        job["paused"] = False
+        job["done"] = False
         job["error"] = None
     
     try:
@@ -555,12 +630,23 @@ def run_job(job_id: str):
             job["latest_block"] = latest_block
         
         # Initialize state (restore from saved state if resuming)
-        all_txs_raw_dict = job.get("seen_hashes", {})  # Deduplication by hash
+        # Use job state as source of truth - work with reference but persist frequently
+        with JOBS_LOCK:
+            if "seen_hashes" not in job:
+                job["seen_hashes"] = {}
+            if "segments" not in job:
+                job["segments"] = []
+            if "partial_preview_eth" not in job:
+                job["partial_preview_eth"] = []
+        
+        # Get references to job state (will persist after each segment)
+        all_txs_raw_dict = job["seen_hashes"]  # Work directly with job state
         pages_total = job.get("pages_total", 0)
-        segments = job.get("segments", [])  # Restore segments if available
+        segments = job["segments"]  # Work directly with job state
         window_blocks = job.get("window_blocks", MAX_WINDOW_BLOCKS)
         seg_start = job.get("seg_start", start_block)
         segment_num = job.get("segments_done", 0)
+        coverage_start = job.get("coverage_start", start_block)
         
         while seg_start <= latest_block:
             # Check stop request
@@ -572,12 +658,14 @@ def run_job(job_id: str):
                     job["stop_requested"] = False  # Reset stop flag
                     job["error"] = None  # No error, just paused
                     job["seg_start"] = seg_start  # Save state for resume
-                    job["seen_hashes"] = all_txs_raw_dict  # Save dedupe state
                     job["window_blocks"] = window_blocks  # Save window size
                     job["pages_total"] = pages_total  # Save pages total
                     job["segments_done"] = segment_num  # Save segment count
-                    job["segments"] = segments  # Save segments list
-                    print(f"[JOB {job_id}] Paused by user at segment {segment_num}, seg_start={seg_start}", flush=True)
+                    # seen_hashes and segments are already in job state (we work with references)
+                    # Update coverage_end from last completed segment
+                    if segments:
+                        job["coverage_end"] = segments[-1]["end"]
+                    print(f"[JOB {job_id}] Paused by user at segment {segment_num}, seg_start={seg_start}, collected={len(all_txs_raw_dict)}", flush=True)
                     return
             
             seg_end = min(seg_start + window_blocks - 1, latest_block)
@@ -614,12 +702,14 @@ def run_job(job_id: str):
                     job["stop_requested"] = False  # Reset stop flag
                     job["error"] = None  # No error, just paused
                     job["seg_start"] = seg_start  # Save state for resume
-                    job["seen_hashes"] = all_txs_raw_dict  # Save dedupe state
                     job["window_blocks"] = window_blocks  # Save window size
                     job["pages_total"] = pages_total  # Save pages total
                     job["segments_done"] = segment_num  # Save segment count
-                    job["segments"] = segments  # Save segments list
-                print(f"[JOB {job_id}] Paused by user at segment {segment_num}, seg_start={seg_start}", flush=True)
+                    # seen_hashes and segments are already in job state (we work with references)
+                    # Update coverage_end from last completed segment
+                    if segments:
+                        job["coverage_end"] = segments[-1]["end"]
+                print(f"[JOB {job_id}] Paused by user at segment {segment_num}, seg_start={seg_start}, collected={len(all_txs_raw_dict)}", flush=True)
                 return
             
             # Check max_pages limit
@@ -666,17 +756,10 @@ def run_job(job_id: str):
             for tx in window_txs:
                 tx_hash = tx.get("hash")
                 if tx_hash:
+                    # Add to deduplication dict (already a reference to job state)
                     all_txs_raw_dict[tx_hash] = tx
-                    
-                    # Add to preview (keep last 200 to avoid memory issues during long crawls)
-                    with JOBS_LOCK:
-                        preview = job.get("eth_preview", [])
-                        formatted = format_transaction(tx, address)
-                        preview.append(formatted)
-                        if len(preview) > PREVIEW_LIMIT:
-                            preview.pop(0)  # Remove oldest to keep size at PREVIEW_LIMIT
-                        job["eth_preview"] = preview
             
+            # Add segment metadata
             segments.append({
                 "start": seg_start,
                 "end": seg_end,
@@ -685,7 +768,27 @@ def run_job(job_id: str):
                 "cap_hit": False
             })
             
-            # Update progress
+            # Update partial preview with raw tx dicts (up to RENDER_LIMIT_ETH)
+            with JOBS_LOCK:
+                partial_preview = job.get("partial_preview_eth", [])
+                # Add new transactions to preview (raw dicts, not formatted)
+                for tx in window_txs:
+                    if len(partial_preview) < RENDER_LIMIT_ETH:
+                        partial_preview.append(tx)
+                    else:
+                        break  # Already at limit
+                job["partial_preview_eth"] = partial_preview
+                
+                # Also maintain formatted preview for backward compatibility (last PREVIEW_LIMIT)
+                formatted_preview = job.get("eth_preview", [])
+                for tx in window_txs:
+                    formatted = format_transaction(tx, address)
+                    formatted_preview.append(formatted)
+                    if len(formatted_preview) > PREVIEW_LIMIT:
+                        formatted_preview.pop(0)  # Remove oldest
+                job["eth_preview"] = formatted_preview
+            
+            # Update progress state after segment completion
             with JOBS_LOCK:
                 job["seg_start"] = seg_end + 1
                 job["segments_done"] = segment_num
@@ -694,6 +797,9 @@ def run_job(job_id: str):
                 job["current_segment_start"] = seg_start
                 job["current_segment_end"] = seg_end
                 job["window_blocks"] = window_blocks
+                job["coverage_end"] = seg_end  # Update coverage_end after successful segment
+                # Store last 10 segments metadata to avoid memory blow
+                job["segments_tail"] = segments[-10:] if len(segments) > 10 else segments
                 
                 # Check for high activity condition (segment count)
                 if segment_num >= 2000 and not job.get("high_activity", False):
@@ -717,15 +823,19 @@ def run_job(job_id: str):
                 window_blocks = min(window_blocks * 2, MAX_WINDOW_BLOCKS)
         
         # Job completed successfully
-        # Build final sorted list
+        # Build final sorted list from job state (all_txs_raw_dict is a reference to job["seen_hashes"])
         all_txs_raw = sorted(
             all_txs_raw_dict.values(),
             key=lambda x: (int(x.get("blockNumber", 0)), int(x.get("timeStamp", 0)))
         )
         
-        # Compute coverage
+        # Compute coverage from segments
         coverage_start = segments[0]["start"] if segments else start_block
         coverage_end = segments[-1]["end"] if segments else latest_block
+        
+        # Update job state with final coverage
+        with JOBS_LOCK:
+            job["coverage_end"] = coverage_end
         
         # Create result_id and store in cache
         result_id = str(uuid.uuid4())
@@ -959,7 +1069,8 @@ def crawl(
     address: str,
     start_block: int,
     include_tokens: bool = False,
-    crawl_all: bool = Query(False),
+    mode: Optional[str] = Query(None),
+    crawl_all: bool = Query(False),  # Backward compatibility
     max_pages: Optional[str] = Query(None),
     page: int = 1,
     token_page: int = 1,
@@ -988,6 +1099,20 @@ def crawl(
     eth_rendered = None
     token_total = None
     token_rendered = None
+    
+    # Parse mode parameter: convert to crawl_all boolean
+    # Priority: mode parameter > crawl_all parameter (for backward compatibility)
+    if mode is not None and mode.strip() != "":
+        mode_lower = mode.lower().strip()
+        if mode_lower == "all":
+            crawl_all = True
+        elif mode_lower == "browse":
+            crawl_all = False
+        else:
+            # Invalid mode value, default to True (Crawl ALL)
+            crawl_all = True
+    # If mode not provided, use crawl_all parameter as-is (backward compatibility with existing URLs)
+    # crawl_all defaults to False in Query(), but form will send mode=all by default
     
     # Parse max_pages: handle empty string from form submission
     # Browser sends max_pages="" when field is empty, which FastAPI can't parse as Optional[int]
@@ -1194,12 +1319,17 @@ def show_results(request: Request, rid: str = Query(None)):
         token_all_mode_pages = len(token_segments)  # Rough estimate
     
     # Build results dict for template
+    # Generate coverage status
+    coverage_status = get_coverage_status(coverage_start, coverage_end, latest_block, done=True)
+    
     results = {
         "address": address,
         "start_block": start_block,
         "latest_block": latest_block,
         "include_tokens": include_tokens,
         "crawl_all": True,
+        "done": True,
+        "paused": False,
         "max_pages": None,
         "eth_count": len(txs_page),
         "txs_page": txs_page,
@@ -1226,7 +1356,8 @@ def show_results(request: Request, rid: str = Query(None)):
         "token_render_limit": RENDER_LIMIT_TOKENS if include_tokens else None,
         "result_id": rid,
         "coverage_start": coverage_start,
-        "coverage_end": coverage_end
+        "coverage_end": coverage_end,
+        "coverage_status": coverage_status
     }
     
     return templates.TemplateResponse(
@@ -1266,16 +1397,27 @@ def results_partial(request: Request, job_id: str = Query(...)):
     
     # Get all collected transactions so far from raw dict (for up to 2000 display)
     all_txs_raw_dict = job.get("seen_hashes", {})  # This is the dedupe dict
-    all_txs_raw = sorted(
-        all_txs_raw_dict.values(),
-        key=lambda x: (int(x.get("blockNumber", 0)), int(x.get("timeStamp", 0)))
-    )
+    eth_total_so_far = len(all_txs_raw_dict)
     
-    eth_total_so_far = len(all_txs_raw)
-    eth_rendered = min(RENDER_LIMIT_ETH, eth_total_so_far)  # Show up to 2000
-    
-    # Format only the first eth_rendered for display
-    txs_page = [format_transaction(tx, address) for tx in all_txs_raw[:eth_rendered]]
+    # Use partial_preview_eth if available (raw dicts), otherwise sort all
+    if job.get("partial_preview_eth") and len(job["partial_preview_eth"]) > 0:
+        # Use preview (already limited to RENDER_LIMIT_ETH)
+        preview_raw = job["partial_preview_eth"]
+        # Sort preview by block and timestamp
+        preview_sorted = sorted(
+            preview_raw,
+            key=lambda x: (int(x.get("blockNumber", 0)), int(x.get("timeStamp", 0)))
+        )
+        eth_rendered = len(preview_sorted)
+        txs_page = [format_transaction(tx, address) for tx in preview_sorted]
+    else:
+        # Fallback: sort all and take first RENDER_LIMIT_ETH
+        all_txs_raw = sorted(
+            all_txs_raw_dict.values(),
+            key=lambda x: (int(x.get("blockNumber", 0)), int(x.get("timeStamp", 0)))
+        )
+        eth_rendered = min(RENDER_LIMIT_ETH, eth_total_so_far)
+        txs_page = [format_transaction(tx, address) for tx in all_txs_raw[:eth_rendered]]
     
     # Token data
     token_transfers = []
@@ -1295,6 +1437,13 @@ def results_partial(request: Request, job_id: str = Query(...)):
             token_transfers = [format_token_transfer(tx, address) for tx in all_token_txs_raw[:token_rendered]]
             token_count = len(token_transfers)
     
+    # Generate coverage status for partial results
+    partial_coverage_start = job.get("coverage_start", start_block)
+    partial_coverage_end = job.get("coverage_end", job.get("current_segment_end", start_block - 1))
+    partial_done = job.get("done", False)
+    partial_paused = job.get("paused", False)
+    coverage_status = get_coverage_status(partial_coverage_start, partial_coverage_end, latest_block, partial_done)
+    
     results = {
         "address": address,
         "start_block": start_block,
@@ -1302,6 +1451,8 @@ def results_partial(request: Request, job_id: str = Query(...)):
         "include_tokens": include_tokens,
         "crawl_all": True,
         "partial": True,  # Flag to show this is partial results
+        "done": partial_done,
+        "paused": partial_paused,
         "max_pages": None,
         "eth_count": len(txs_page),
         "txs_page": txs_page,
@@ -1317,6 +1468,10 @@ def results_partial(request: Request, job_id: str = Query(...)):
         "all_mode_pages": job.get("segments_done", 0),
         "all_mode_truncated": False,
         "segments": job.get("segments", []),
+        "segments_done": job.get("segments_done", 0),
+        "pages_total": job.get("pages_total", 0),
+        "current_segment_start": job.get("current_segment_start"),
+        "current_segment_end": job.get("current_segment_end"),
         "eth_total": eth_total_so_far,
         "eth_rendered": eth_rendered,
         "eth_render_limit": RENDER_LIMIT_ETH,
@@ -1329,8 +1484,9 @@ def results_partial(request: Request, job_id: str = Query(...)):
         "result_id": None,  # No rid for partial results
         "result_source": "job",  # Flag for partial download
         "job_id": job_id,  # Store job_id for partial download
-        "coverage_start": start_block,
-        "coverage_end": job.get("current_segment_end", latest_block) if latest_block else None
+        "coverage_start": partial_coverage_start,
+        "coverage_end": partial_coverage_end,
+        "coverage_status": coverage_status
     }
     
     return templates.TemplateResponse(
@@ -1358,8 +1514,16 @@ def download_partial_results(job_id: str = Query(...)):
         
         job = JOBS[job_id]
     
-    # Get all collected transactions from raw dict
+    # Get all collected transactions from raw dict (authoritative source)
     all_txs_raw_dict = job.get("seen_hashes", {})
+    
+    if not all_txs_raw_dict:
+        return HTMLResponse(
+            content="<h1>Error</h1><p>No transactions collected yet.</p>",
+            status_code=404
+        )
+    
+    # Sort all transactions by block and timestamp
     all_txs_raw = sorted(
         all_txs_raw_dict.values(),
         key=lambda x: (int(x.get("blockNumber", 0)), int(x.get("timeStamp", 0)))
@@ -1384,26 +1548,43 @@ def download_partial_results(job_id: str = Query(...)):
         
         # Write rows
         for tx in all_txs_raw:
-            time_str = tx.get("timeStamp", "")
-            block = tx.get("blockNumber", "")
-            from_addr = tx.get("from", "")
-            to_addr = tx.get("to", "")
-            value = tx.get("value", "0")
-            hash_val = tx.get("hash", "")
-            
             # Determine direction
+            tx_from = tx.get("from", "").lower()
+            tx_to = tx.get("to", "").lower()
             address_lower = address.lower()
-            if from_addr.lower() == address_lower:
+            
+            if tx_from == address_lower:
                 direction = "OUT"
-            elif to_addr.lower() == address_lower:
+            elif tx_to == address_lower:
                 direction = "IN"
             else:
                 direction = "UNKNOWN"
             
-            writer.writerow([time_str, block, direction, from_addr, to_addr, value, hash_val])
+            # Format timestamp
+            timestamp = tx.get("timeStamp", "0")
+            try:
+                dt = datetime.utcfromtimestamp(int(timestamp))
+                time_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+            except (ValueError, TypeError):
+                time_str = "N/A"
+            
+            # Format value (in ETH)
+            value_wei = tx.get("value", "0")
+            value_eth = wei_to_eth(value_wei)
+            
+            # Write row
+            writer.writerow([
+                time_str,
+                tx.get("blockNumber", "N/A"),
+                direction,
+                tx.get("from", "N/A"),
+                tx.get("to", "N/A"),
+                f"{value_eth:.6f}",
+                tx.get("hash", "N/A")
+            ])
             yield output.getvalue()
             output.seek(0)
-        output.truncate(0)
+            output.truncate(0)
     
     return StreamingResponse(
         generate_csv(),
