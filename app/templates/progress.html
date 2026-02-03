@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crawl Progress - Ethereum TX Crawler</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .status-box {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .status-box.running {
+            background-color: #fff3cd;
+            border-left-color: #ffc107;
+        }
+        .status-box.done {
+            background-color: #d4edda;
+            border-left-color: #28a745;
+        }
+        .status-box.error {
+            background-color: #f8d7da;
+            border-left-color: #dc3545;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-item {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 3px solid #6c757d;
+        }
+        .stat-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+        }
+        .buttons {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            margin-right: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        .btn-stop {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-stop:hover {
+            background-color: #c82333;
+        }
+        .btn-resume {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-resume:hover {
+            background-color: #218838;
+        }
+        .btn-resume:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error-message {
+            color: #dc3545;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8d7da;
+            border-radius: 4px;
+        }
+        /* Preview table styles */
+        .table-container {
+            overflow-x: auto;
+            max-width: 100%;
+            margin-top: 10px;
+        }
+        .preview-table {
+            width: 100%;
+            table-layout: fixed;
+            border-collapse: collapse;
+        }
+        .preview-table th,
+        .preview-table td {
+            padding: 6px 8px;
+            font-size: 14px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            border: 1px solid #ddd;
+        }
+        .preview-table th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+        }
+        .cell-hash {
+            font-family: monospace;
+        }
+        .cell-address {
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        .wrap {
+            white-space: normal;
+            word-break: break-all;
+        }
+        /* Column widths */
+        .preview-table th:nth-child(1), .preview-table td:nth-child(1) { width: 12%; } /* Time */
+        .preview-table th:nth-child(2), .preview-table td:nth-child(2) { width: 8%; }  /* Block */
+        .preview-table th:nth-child(3), .preview-table td:nth-child(3) { width: 10%; } /* Direction */
+        .preview-table th:nth-child(4), .preview-table td:nth-child(4) { width: 18%; } /* From */
+        .preview-table th:nth-child(5), .preview-table td:nth-child(5) { width: 18%; } /* To */
+        .preview-table th:nth-child(6), .preview-table td:nth-child(6) { width: 12%; } /* Value */
+        .preview-table th:nth-child(7), .preview-table td:nth-child(7) { width: 22%; } /* Hash */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Crawl Progress</h1>
+        <div id="status-box" class="status-box">
+            <div id="status-text">Initializing...</div>
+            <div id="loading" class="loading"></div>
+            <div style="margin-top: 10px; font-size: 0.9em; color: #666;">Updates every 5 seconds</div>
+        </div>
+        
+        <div class="stats" id="stats">
+            <div class="stat-item">
+                <div class="stat-label">Status</div>
+                <div class="stat-value" id="stat-status">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Segments Done</div>
+                <div class="stat-value" id="stat-segments">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Pages Fetched</div>
+                <div class="stat-value" id="stat-pages">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Unique Transactions</div>
+                <div class="stat-value" id="stat-txs">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Current Segment</div>
+                <div class="stat-value" id="stat-segment">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Latest Block</div>
+                <div class="stat-value" id="stat-latest">-</div>
+            </div>
+        </div>
+        
+        <div class="buttons">
+            <button id="btn-stop" class="btn-stop" onclick="stopJob()">Stop</button>
+            <button id="btn-resume" class="btn-resume" onclick="resumeJob()" disabled>Resume</button>
+            <a id="btn-partial" href="#" style="display: none; padding: 10px 20px; margin-left: 10px; background-color: #17a2b8; color: white; text-decoration: none; border-radius: 4px;">View Partial Results</a>
+        </div>
+        
+        <div id="error-container"></div>
+        
+        <div id="warn-box" style="display: none; background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 4px;">
+            <div style="font-weight: bold; margin-bottom: 10px;">⚠ This address is extremely active in the selected range.</div>
+            <div style="margin-bottom: 10px;">Crawling can continue from your chosen start block, but it may take a long time due to API limits. You can Pause anytime and view/download partial results.</div>
+            <div id="warn-reason" style="font-size: 0.9em; color: #666; margin-bottom: 10px;"></div>
+            <div style="margin-top: 10px;">
+                <a id="warn-partial-link" href="#" style="display: inline-block; padding: 8px 16px; margin-right: 10px; background-color: #17a2b8; color: white; text-decoration: none; border-radius: 4px;">View Partial Results</a>
+                <a id="warn-download-link" href="#" style="display: inline-block; padding: 8px 16px; background-color: #28a745; color: white; text-decoration: none; border-radius: 4px;">Download Partial CSV</a>
+            </div>
+        </div>
+        
+        <div id="preview-section" style="margin-top: 30px;">
+            <h2>Preview (last 200 collected)</h2>
+            <div id="eth-preview-container"></div>
+            <div id="token-preview-container"></div>
+        </div>
+    </div>
+    
+    <script>
+        const jobId = "{{ job_id }}";
+        let pollInterval;
+        
+        // Debug: log job_id to console
+        console.log("Job ID:", jobId);
+        if (!jobId || jobId === "") {
+            console.error("ERROR: job_id is empty!");
+            document.getElementById("status-text").textContent = "ERROR: Missing job_id";
+        }
+        
+        function updateStatus(data) {
+            const statusBox = document.getElementById("status-box");
+            const statusText = document.getElementById("status-text");
+            const loading = document.getElementById("loading");
+            const btnStop = document.getElementById("btn-stop");
+            const btnResume = document.getElementById("btn-resume");
+            const errorContainer = document.getElementById("error-container");
+            const btnPartial = document.getElementById("btn-partial");
+            
+            // Update status box class
+            statusBox.className = "status-box";
+            errorContainer.innerHTML = ""; // Clear error container
+            
+            if (data.running) {
+                statusBox.classList.add("running");
+                statusText.textContent = "Running...";
+                loading.style.display = "inline-block";
+                btnStop.disabled = false;
+                btnResume.disabled = true;
+                // Hide partial results button when running
+                if (btnPartial) {
+                    btnPartial.style.display = "none";
+                }
+            } else if (data.paused) {
+                statusBox.classList.add("running"); // Use running style for paused
+                statusText.textContent = "Paused";
+                loading.style.display = "none";
+                btnStop.disabled = true;
+                btnResume.disabled = false; // Enable resume when paused
+                // Show "View Partial Results" button when paused
+                if (btnPartial) {
+                    btnPartial.style.display = "inline-block";
+                    btnPartial.href = `/results_partial?job_id=${jobId}`;
+                }
+            } else if (data.done) {
+                statusBox.classList.add("done");
+                loading.style.display = "none";
+                btnStop.disabled = true;
+                btnResume.disabled = true;
+                
+                if (data.error && !data.paused) {
+                    // Only show error if not paused (paused is not an error)
+                    statusBox.classList.add("error");
+                    statusText.textContent = "Error: " + data.error;
+                    errorContainer.innerHTML = `<div class="error-message">${data.error}</div>`;
+                } else if (data.rid) {
+                    statusText.textContent = "Completed! Redirecting to results...";
+                    // Redirect to results page
+                    setTimeout(() => {
+                        window.location.href = "/results?rid=" + data.rid;
+                    }, 1000);
+                    return; // Stop polling
+                } else {
+                    statusText.textContent = "Done";
+                }
+            } else {
+                statusText.textContent = "Initializing...";
+                loading.style.display = "inline-block";
+                btnStop.disabled = true;
+                btnResume.disabled = true;
+            }
+            
+            // Update stats
+            let statusLabel = "Initializing";
+            if (data.running) {
+                statusLabel = "Running";
+            } else if (data.paused) {
+                statusLabel = "Paused";
+            } else if (data.done) {
+                statusLabel = data.error && !data.paused ? "Error" : "Done";
+            }
+            document.getElementById("stat-status").textContent = statusLabel;
+            document.getElementById("stat-segments").textContent = data.segments_done || 0;
+            document.getElementById("stat-pages").textContent = data.pages_total || 0;
+            document.getElementById("stat-txs").textContent = data.eth_total_unique || 0;
+            
+            if (data.current_segment_start && data.current_segment_end) {
+                document.getElementById("stat-segment").textContent = `${data.current_segment_start}-${data.current_segment_end}`;
+            } else {
+                document.getElementById("stat-segment").textContent = "-";
+            }
+            
+            document.getElementById("stat-latest").textContent = data.latest_block || "-";
+            
+            // Update high activity warning banner
+            updateHighActivityWarning(data);
+            
+            // Update preview tables
+            updatePreview(data);
+        }
+        
+        function updateHighActivityWarning(data) {
+            const warnBox = document.getElementById("warn-box");
+            const warnReason = document.getElementById("warn-reason");
+            const warnPartialLink = document.getElementById("warn-partial-link");
+            const warnDownloadLink = document.getElementById("warn-download-link");
+            
+            // Show warning if high_activity is true (gracefully handle missing keys)
+            if (data.high_activity) {
+                warnBox.style.display = "block";
+                
+                // Update reason text
+                let reasonText = "Reason: " + (data.high_activity_reason || "High activity detected");
+                if (data.window_blocks !== undefined) {
+                    reasonText += ` (window: ${data.window_blocks} blocks`;
+                    if (data.segments_done !== undefined) {
+                        reasonText += `, segments: ${data.segments_done}`;
+                    }
+                    reasonText += ")";
+                }
+                warnReason.textContent = reasonText;
+                
+                // Update links
+                warnPartialLink.href = `/results_partial?job_id=${jobId}`;
+                warnDownloadLink.href = `/results_partial/download?job_id=${jobId}`;
+            } else {
+                warnBox.style.display = "none";
+            }
+        }
+        
+        function updatePreview(data) {
+            const ethContainer = document.getElementById("eth-preview-container");
+            const tokenContainer = document.getElementById("token-preview-container");
+            
+            // ETH preview table
+            if (data.eth_preview && data.eth_preview.length > 0) {
+                let html = `<h3>ETH Transactions (${data.eth_preview.length} of ${data.eth_total_unique || 0} collected)</h3>`;
+                html += `<div class="table-container">`;
+                html += `<table class="preview-table">`;
+                html += `<thead><tr>`;
+                html += `<th>Time</th>`;
+                html += `<th>Block</th>`;
+                html += `<th>Direction</th>`;
+                html += `<th>From</th>`;
+                html += `<th>To</th>`;
+                html += `<th style="text-align: right;">Value (ETH)</th>`;
+                html += `<th>Hash</th>`;
+                html += `</tr></thead><tbody>`;
+                
+                data.eth_preview.forEach(tx => {
+                    const hash = tx.hash || "N/A";
+                    const hashShort = hash.length > 20 ? hash.substring(0, 10) + "…" + hash.substring(hash.length - 6) : hash;
+                    
+                    html += `<tr>`;
+                    html += `<td>${tx.time || "N/A"}</td>`;
+                    html += `<td>${tx.block || "N/A"}</td>`;
+                    html += `<td>${tx.direction || "N/A"}</td>`;
+                    html += `<td class="cell-address" title="${tx.from || "N/A"}">${tx.from || "N/A"}</td>`;
+                    html += `<td class="cell-address" title="${tx.to || "N/A"}">${tx.to || "N/A"}</td>`;
+                    html += `<td style="text-align: right;">${tx.value_eth || "0"}</td>`;
+                    html += `<td class="cell-hash" title="${hash}">${hashShort}</td>`;
+                    html += `</tr>`;
+                });
+                
+                html += `</tbody></table></div>`;
+                ethContainer.innerHTML = html;
+            } else {
+                ethContainer.innerHTML = "<p>No ETH transactions collected yet.</p>";
+            }
+            
+            // Token preview table
+            if (data.token_preview && data.token_preview.length > 0) {
+                let html = `<h3 style="margin-top: 30px;">Token Transfers (${data.token_preview.length} collected)</h3>`;
+                html += `<div class="table-container">`;
+                html += `<table class="preview-table">`;
+                html += `<thead><tr>`;
+                html += `<th>Time</th>`;
+                html += `<th>Block</th>`;
+                html += `<th>Direction</th>`;
+                html += `<th>Token</th>`;
+                html += `<th style="text-align: right;">Amount</th>`;
+                html += `<th>Hash</th>`;
+                html += `</tr></thead><tbody>`;
+                
+                data.token_preview.forEach(tx => {
+                    const hash = tx.hash || "N/A";
+                    const hashShort = hash.length > 20 ? hash.substring(0, 10) + "…" + hash.substring(hash.length - 6) : hash;
+                    
+                    html += `<tr>`;
+                    html += `<td>${tx.time || "N/A"}</td>`;
+                    html += `<td>${tx.block || "N/A"}</td>`;
+                    html += `<td>${tx.direction || "N/A"}</td>`;
+                    html += `<td class="cell-address" title="${tx.token_symbol || "N/A"}">${tx.token_symbol || "N/A"}</td>`;
+                    html += `<td style="text-align: right;">${tx.amount || "0"}</td>`;
+                    html += `<td class="cell-hash" title="${hash}">${hashShort}</td>`;
+                    html += `</tr>`;
+                });
+                
+                html += `</tbody></table></div>`;
+                tokenContainer.innerHTML = html;
+            } else {
+                tokenContainer.innerHTML = "";
+            }
+        }
+        
+        function pollStatus() {
+            if (!jobId || jobId === "") {
+                console.error("Cannot poll: job_id is empty");
+                document.getElementById("status-text").textContent = "ERROR: Missing job_id";
+                return;
+            }
+            
+            fetch(`/crawl_status?job_id=${jobId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => {
+                            throw new Error(err.error || `HTTP ${response.status}`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Status update:", data);
+                    updateStatus(data);
+                    
+                    // Stop polling if done and has rid (will redirect)
+                    if (data.done && data.rid) {
+                        clearInterval(pollInterval);
+                    }
+                })
+                .catch(error => {
+                    console.error("Error polling status:", error);
+                    const statusText = document.getElementById("status-text");
+                    const errorContainer = document.getElementById("error-container");
+                    statusText.textContent = "Status fetch failed: " + error.message;
+                    errorContainer.innerHTML = `<div class="error-message">Status fetch failed: ${error.message}</div>`;
+                });
+        }
+        
+        function stopJob() {
+            const btnStop = document.getElementById("btn-stop");
+            const statusText = document.getElementById("status-text");
+            
+            // Prevent double-click spam
+            if (btnStop.disabled) {
+                return;
+            }
+            
+            // Immediate UI feedback
+            btnStop.disabled = true;
+            statusText.textContent = "Stopping...";
+            
+            fetch(`/crawl_stop?job_id=${jobId}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Stop requested:", data);
+                    // Poll immediately to get updated status
+                    pollStatus();
+                })
+                .catch(error => {
+                    console.error("Error stopping job:", error);
+                    // Re-enable button on error
+                    btnStop.disabled = false;
+                    statusText.textContent = "Error stopping job";
+                });
+        }
+        
+        function resumeJob() {
+            const btnResume = document.getElementById("btn-resume");
+            const statusText = document.getElementById("status-text");
+            
+            // Prevent double-click spam
+            if (btnResume.disabled) {
+                return;
+            }
+            
+            // Immediate UI feedback
+            btnResume.disabled = true;
+            statusText.textContent = "Resuming...";
+            
+            fetch(`/crawl_resume?job_id=${jobId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => {
+                            throw new Error(err.error || response.statusText);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Resume requested:", data);
+                    // Poll immediately to get updated status
+                    pollStatus();
+                })
+                .catch(error => {
+                    console.error("Error resuming job:", error);
+                    alert("Error resuming job: " + (error.message || error));
+                    // Re-enable button on error
+                    btnResume.disabled = false;
+                    statusText.textContent = "Error resuming job";
+                });
+        }
+        
+        // Start polling every 5 seconds
+        pollStatus();
+        pollInterval = setInterval(pollStatus, 5000);
+    </script>
+</body>
+</html>

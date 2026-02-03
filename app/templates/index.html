@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ethereum Transactions Crawler</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1400px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        form {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: bold;
+        }
+        input[type="text"],
+        input[type="number"],
+        input[type="date"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 14px;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #e8f5e9;
+            border-radius: 4px;
+        }
+        .results h2 {
+            margin-top: 0;
+            color: #2e7d32;
+        }
+        .result-item {
+            margin: 10px 0;
+            padding: 8px;
+            background-color: white;
+            border-radius: 4px;
+        }
+        .error {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #ffebee;
+            border-radius: 4px;
+            color: #c62828;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background-color: white;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: bold;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .hash-cell {
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .direction-in {
+            color: #2e7d32;
+            font-weight: bold;
+        }
+        .direction-out {
+            color: #c62828;
+            font-weight: bold;
+        }
+        .pagination {
+            margin: 20px 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+        }
+        .pagination a {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        .pagination a:hover {
+            background-color: #45a049;
+        }
+        .pagination a.disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        .pagination-info {
+            padding: 8px 16px;
+            color: #555;
+            font-weight: bold;
+        }
+        /* Two-column form layout */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            align-items: start;
+            margin-bottom: 20px;
+        }
+        @media (max-width: 900px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        .form-card {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <h1>Ethereum Transactions Crawler</h1>
+    
+    <div class="form-grid">
+        <!-- Balance on Date Form -->
+        <div class="form-card">
+            <form method="GET" action="/balance">
+                <h2 style="margin-top: 0; color: #2e7d32;">ETH Balance on Date</h2>
+                <div class="form-group">
+                    <label for="balance_address">Ethereum Address:</label>
+                    <input type="text" id="balance_address" name="address" placeholder="0x..." value="{{ balance_result.address if balance_result else '' }}" required>
+                </div>
+                <div class="form-group">
+                    <label for="balance_date">Date (00:00 UTC):</label>
+                    <input type="date" id="balance_date" name="date" value="{{ balance_result.date if balance_result else '' }}" required>
+                </div>
+                <button type="submit">Get Balance</button>
+            </form>
+        </div>
+        
+        <!-- Transactions Crawler Form -->
+        <div class="form-card">
+            <form method="GET" action="/crawl">
+        <div class="form-group">
+            <label for="address">Ethereum Address:</label>
+            <input type="text" id="address" name="address" placeholder="0x..." required>
+        </div>
+        <div class="form-group">
+            <label for="start_block">Start Block:</label>
+            <input type="number" id="start_block" name="start_block" placeholder="9000000" required>
+        </div>
+        <div class="form-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="include_tokens" name="include_tokens" value="true" {% if results and results.include_tokens %}checked{% endif %}>
+                <label for="include_tokens">Include Tokens</label>
+            </div>
+        </div>
+        <div class="form-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="crawl_all" name="crawl_all" value="true" {% if results and results.crawl_all %}checked{% endif %}>
+                <label for="crawl_all">Crawl ALL (may take longer)</label>
+            </div>
+            <small style="color: #666; display: block; margin-top: 5px;">For large histories, UI shows only first 2000 rows to prevent browser crash.</small>
+        </div>
+        <div class="form-group">
+            <label for="max_pages">Max pages (optional; empty = no limit):</label>
+            <input type="number" id="max_pages" name="max_pages" min="1" placeholder="(optional) e.g. 10" value="{{ results.max_pages if results and results.max_pages else '' }}">
+        </div>
+                <button type="submit">Crawl Transactions</button>
+            </form>
+        </div>
+    </div>
+    
+    {% if error %}
+    <div class="error">
+        <h2>Error</h2>
+        <p>{{ error }}</p>
+    </div>
+    {% endif %}
+    
+    {% if balance_result %}
+    <div class="results">
+        <h2>Balance Result</h2>
+        <div class="result-item">
+            <strong>Address:</strong> {{ balance_result.address }}
+        </div>
+        <div class="result-item">
+            <strong>Date (00:00 UTC):</strong> {{ balance_result.date }}
+        </div>
+        <div class="result-item">
+            <strong>Block Number:</strong> {{ balance_result.block_no }}
+        </div>
+        <div class="result-item">
+            <strong>Balance (ETH):</strong> {{ balance_result.balance_eth }} ETH
+        </div>
+        <div class="result-item">
+            <strong>Balance (Wei):</strong> {{ balance_result.balance_wei }}
+        </div>
+    </div>
+    {% endif %}
+    
+    {% if results %}
+    <div class="results">
+        <h2>Results</h2>
+        <div class="result-item">
+            <strong>Address:</strong> {{ results.address }}
+        </div>
+        <div class="result-item">
+            <strong>Start Block:</strong> {{ results.start_block }}
+        </div>
+        {% if results.latest_block %}
+        <div class="result-item">
+            <strong>Latest Block:</strong> {{ results.latest_block }}
+        </div>
+        {% endif %}
+        
+        <div class="result-item">
+            <strong>ETH transactions on this page:</strong> {{ results.eth_count }}
+        </div>
+        
+        {% if results.crawl_all %}
+        <div class="result-item" style="background-color: #fff3cd; border-left: 4px solid #ffc107;">
+            {% if results.partial %}
+            <strong>PAUSED:</strong> showing first {{ results.eth_rendered }} of {{ results.eth_total }} collected so far.
+            <br><strong>ALL mode (segmented):</strong> collected {{ results.eth_total }} ETH txs so far ({{ results.segments|length }} segment(s), {{ results.all_mode_pages }} total pages)
+            <br>
+            {% if results.job_id %}
+            <a href="/results_partial/download?job_id={{ results.job_id }}" style="display: inline-block; margin-top: 10px; padding: 10px 20px; background-color: #17a2b8; color: white; text-decoration: none; border-radius: 4px;">Download partial ETH CSV ({{ results.eth_total }} rows)</a>
+            {% endif %}
+            {% else %}
+            <strong>ALL mode (segmented):</strong> loaded TOTAL {{ results.eth_total }} ETH txs across {{ results.segments|length }} segment(s) ({{ results.all_mode_pages }} total pages)
+            {% endif %}
+            {% if results.coverage_start and results.coverage_end %}
+            <br><strong>Coverage:</strong> {{ results.coverage_start }} → {{ results.coverage_end }} (latest: {{ results.latest_block }})
+            {% if results.coverage_end == results.latest_block %}
+            <span style="color: green;">✅ covered to latest</span>
+            {% else %}
+            <span style="color: orange;">⚠ stopped early</span>
+            {% endif %}
+            {% endif %}
+            {% if results.eth_total and results.eth_total > results.eth_render_limit %}
+            <br><em>Displaying first {{ results.eth_rendered }} for performance ({{ results.eth_render_limit }} limit).</em>
+            {% endif %}
+            {% if results.all_mode_truncated %}
+            <br><em>Stopped due to max_pages limit.</em>
+            {% endif %}
+            {% if results.result_id %}
+            <br><a href="/results/download?rid={{ results.result_id }}" style="display: inline-block; margin-top: 10px; padding: 8px 16px; background-color: #28a745; color: white; text-decoration: none; border-radius: 4px;">Download full ETH CSV ({{ results.eth_total }} rows)</a>
+            {% endif %}
+            {% if results.result_id and results.token_total and results.token_total > 0 %}
+            <br><a href="/results/download_tokens?rid={{ results.result_id }}" style="display: inline-block; margin-top: 10px; padding: 8px 16px; background-color: #17a2b8; color: white; text-decoration: none; border-radius: 4px;">Download Token CSV ({{ results.token_total }} rows)</a>
+            {% endif %}
+            {% if results.segments|length > 0 and results.segments|length <= 5 %}
+            <br><small>Segments: {% for seg in results.segments %}[{{ seg.start }}-{{ seg.end }}: {{ seg.tx_count }} txs, {{ seg.pages }} pages]{% if not loop.last %}, {% endif %}{% endfor %}</small>
+            {% elif results.segments|length > 5 %}
+            <br><small>First 5 segments: {% for seg in results.segments[:5] %}[{{ seg.start }}-{{ seg.end }}: {{ seg.tx_count }} txs]{% if not loop.last %}, {% endif %}{% endfor %}... ({{ results.segments|length }} total)</small>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        {% if results.txs_page %}
+        {% set tokens_param = "&include_tokens=true" if results.include_tokens else "" %}
+        {% set token_page_param = "&token_page=" + results.token_page|string if results.include_tokens else "" %}
+        
+        {% if not results.crawl_all %}
+        <div class="pagination">
+            {% if results.has_prev %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ token_page_param }}&page_size={{ results.page_size }}&page={{ results.page - 1 }}">Prev</a>
+            {% else %}
+            <a href="#" class="disabled">Prev</a>
+            {% endif %}
+            <span class="pagination-info">ETH Page {{ results.page }}</span>
+            {% if results.has_next %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ token_page_param }}&page_size={{ results.page_size }}&page={{ results.page + 1 }}">Next</a>
+            {% else %}
+            <a href="#" class="disabled">Next</a>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Time (UTC)</th>
+                    <th>Block</th>
+                    <th>Direction</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Value (ETH)</th>
+                    <th>Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tx in results.txs_page %}
+                <tr>
+                    <td>{{ tx.time }}</td>
+                    <td>{{ tx.block }}</td>
+                    <td class="direction-{{ tx.direction.lower() }}">{{ tx.direction }}</td>
+                    <td class="hash-cell">{{ tx.from }}</td>
+                    <td class="hash-cell">{{ tx.to }}</td>
+                    <td>{{ tx.value_eth }}</td>
+                    <td class="hash-cell">{{ tx.hash }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        {% if not results.crawl_all %}
+        <div class="pagination">
+            {% if results.has_prev %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ token_page_param }}&page_size={{ results.page_size }}&page={{ results.page - 1 }}">Prev</a>
+            {% else %}
+            <a href="#" class="disabled">Prev</a>
+            {% endif %}
+            <span class="pagination-info">ETH Page {{ results.page }}</span>
+            {% if results.has_next %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ token_page_param }}&page_size={{ results.page_size }}&page={{ results.page + 1 }}">Next</a>
+            {% else %}
+            <a href="#" class="disabled">Next</a>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% endif %}
+        
+        {% if results.include_tokens %}
+        <div class="result-item">
+            <strong>Token transfers on this page:</strong> {{ results.token_count }}
+        </div>
+        
+        {% if results.crawl_all and results.token_count > 0 %}
+        <div class="result-item" style="background-color: #fff3cd; border-left: 4px solid #ffc107;">
+            <strong>ALL mode (segmented):</strong> loaded TOTAL {{ results.token_total }} token transfers across {{ results.token_segments|length }} segment(s) ({{ results.token_all_mode_pages }} total pages)
+            {% if results.token_total and results.token_total > results.token_render_limit %}
+            <br><em>Displaying first {{ results.token_rendered }} for performance ({{ results.token_render_limit }} limit).</em>
+            {% endif %}
+            {% if results.token_all_mode_truncated %}
+            <br><em>Stopped due to max_pages limit.</em>
+            {% endif %}
+            {% if results.token_segments|length > 0 and results.token_segments|length <= 5 %}
+            <br><small>Segments: {% for seg in results.token_segments %}[{{ seg.start }}-{{ seg.end }}: {{ seg.tx_count }} txs, {{ seg.pages }} pages]{% if not loop.last %}, {% endif %}{% endfor %}</small>
+            {% elif results.token_segments|length > 5 %}
+            <br><small>First 5 segments: {% for seg in results.token_segments[:5] %}[{{ seg.start }}-{{ seg.end }}: {{ seg.tx_count }} txs]{% if not loop.last %}, {% endif %}{% endfor %}... ({{ results.token_segments|length }} total)</small>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        {% if results.token_count == 0 %}
+        <div class="result-item">
+            <p>No token transfers on this page.</p>
+        </div>
+        {% else %}
+        {% set tokens_param = "&include_tokens=true" %}
+        {% set page_param = "&page=" + results.page|string %}
+        
+        <h3 style="margin-top: 30px; color: #2e7d32;">ERC-20 Token Transfers</h3>
+        
+        {% if not results.crawl_all %}
+        <div class="pagination">
+            {% if results.token_has_prev %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ page_param }}&page_size={{ results.page_size }}&token_page={{ results.token_page - 1 }}">Prev</a>
+            {% else %}
+            <a href="#" class="disabled">Prev</a>
+            {% endif %}
+            <span class="pagination-info">Token Page {{ results.token_page }}</span>
+            {% if results.token_has_next %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ page_param }}&page_size={{ results.page_size }}&token_page={{ results.token_page + 1 }}">Next</a>
+            {% else %}
+            <a href="#" class="disabled">Next</a>
+            {% endif %}
+        </div>
+        {% endif %}
+        
+        {% if results.token_transfers %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Time (UTC)</th>
+                    <th>Block</th>
+                    <th>Direction</th>
+                    <th>Token</th>
+                    <th>Amount</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Contract</th>
+                    <th>Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tx in results.token_transfers %}
+                <tr>
+                    <td>{{ tx.time }}</td>
+                    <td>{{ tx.block }}</td>
+                    <td class="direction-{{ tx.direction.lower() }}">{{ tx.direction }}</td>
+                    <td>{{ tx.token_symbol }} ({{ tx.token_name }})</td>
+                    <td>{{ tx.amount }}</td>
+                    <td class="hash-cell">{{ tx.from }}</td>
+                    <td class="hash-cell">{{ tx.to }}</td>
+                    <td class="hash-cell">{{ tx.contract_address }}</td>
+                    <td class="hash-cell">{{ tx.hash }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        {% if not results.crawl_all %}
+        <div class="pagination">
+            {% if results.token_has_prev %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ page_param }}&page_size={{ results.page_size }}&token_page={{ results.token_page - 1 }}">Prev</a>
+            {% else %}
+            <a href="#" class="disabled">Prev</a>
+            {% endif %}
+            <span class="pagination-info">Token Page {{ results.token_page }}</span>
+            {% if results.token_has_next %}
+            <a href="/crawl?address={{ results.address }}&start_block={{ results.start_block }}{{ tokens_param }}{{ page_param }}&page_size={{ results.page_size }}&token_page={{ results.token_page + 1 }}">Next</a>
+            {% else %}
+            <a href="#" class="disabled">Next</a>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% endif %}
+        {% endif %}
+        {% endif %}
+    </div>
+    {% endif %}
+</body>
+</html>
